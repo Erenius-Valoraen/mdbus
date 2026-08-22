@@ -1,0 +1,20 @@
+# build
+build/
+*.o
+*.out
+
+# python
+.venv/
+__pycache__/
+*.pyc
+
+# generated results: figures are kept as samples, raw sample data is not
+results/**/*.csv
+results/**/*.bin
+results/**/*.json
+
+# editors / os
+.vscode/
+.idea/
+.DS_Store
+compile_commands.json
