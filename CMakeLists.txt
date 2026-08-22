@@ -32,3 +32,9 @@ add_executable(pingpong_legacy legacy/pingpong.cpp)
 target_link_libraries(pingpong_legacy PRIVATE bus)
 
 enable_testing()
+
+# Tests. Each is a standalone binary returning non-zero on failure, registered
+# with ctest. add_test's name is what `ctest -R` matches on.
+add_executable(test_timing tests/test_timing.cpp)
+target_link_libraries(test_timing PRIVATE bus)
+add_test(NAME timing COMMAND test_timing)
