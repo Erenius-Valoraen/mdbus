@@ -8,7 +8,10 @@
 // clock rather than merely as a cycle counter. Whether this CPU has that
 // property is checked at startup (S1.2) rather than assumed.
 
+#include <chrono>
 #include <cstdint>
+#include <ctime>
+#include <thread>
 #include <cpuid.h>       // __get_cpuid
 #include <x86intrin.h>   // __rdtsc, __rdtscp, _mm_lfence
 
@@ -88,6 +91,85 @@ inline bool running_under_hypervisor() noexcept {
         return false;
     }
      return (ecx >> 31) & 1;
+}
+
+
+// ---------------------------------------------------------------------------
+// Calibration (S1.3)
+//
+// The TSC counts ticks; every reported figure is in nanoseconds. The bridge is
+// a ticks-per-nanosecond ratio, measured at startup against CLOCK_MONOTONIC
+// rather than taken from the kernel's boot-time estimate -- which under a
+// hypervisor is itself second-hand.
+// ---------------------------------------------------------------------------
+
+// CLOCK_MONOTONIC as a flat nanosecond count.
+//
+// MONOTONIC rather than REALTIME: REALTIME is wall-clock time and can step
+// backwards when NTP corrects it, which would make a duration negative.
+//
+// TODO(S1.3):
+//   1. declare a `timespec ts;`
+//   2. clock_gettime(CLOCK_MONOTONIC, &ts);
+//   3. return seconds converted to ns, plus the ns field
+inline uint64_t monotonic_ns() noexcept {
+    timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    uint64_t ns = uint64_t(ts.tv_sec) * 1'000'000'000ULL + uint64_t(ts.tv_nsec);
+    return ns;
+}
+
+// Everything needed to interpret a raw tick count, plus the environment flags
+// that say whether those ticks mean anything. Carried alongside every result so
+// a run can never be reported without the conditions that produced it.
+struct TscClock {
+    double ticks_per_ns = 0.0;
+    double ns_per_tick  = 0.0;   // reciprocal, precomputed: see below
+    bool   invariant    = false;
+    bool   virtualized  = false;
+
+    // Convert a raw tick delta to nanoseconds.
+    //
+    // Multiplying by a stored reciprocal rather than dividing by ticks_per_ns
+    // is deliberate: an FP divide is ~4x the latency of a multiply, and this
+    // runs once per recorded sample when a run is post-processed.
+    double to_ns(uint64_t ticks) const noexcept {
+        return static_cast<double>(ticks) * ns_per_tick;
+    }
+
+    double tsc_freq_mhz() const noexcept { return ticks_per_ns * 1000.0; }
+};
+
+// Measure the TSC rate by racing it against CLOCK_MONOTONIC over `interval_ms`.
+//
+// The sleep duration does not need to be accurate -- both clocks are read
+// before and after, so an overshooting sleep is measured, not assumed. Longer
+// intervals dilute the fixed read-skew between the two clocks: ~30 ns of skew
+// is 3% of a 1 us interval but 0.00003% of a 100 ms one.
+//
+// TODO(S1.3):
+//   1. read tsc and monotonic_ns() back to back  (same order at both ends)
+//   2. sleep for interval_ms
+//   3. read both again, in the same order
+//   4. ticks_per_ns = tick delta / ns delta   (force floating point!)
+//   5. fill in ns_per_tick, and the two CPUID flags
+inline TscClock calibrate_tsc(unsigned interval_ms = 100) noexcept {
+    TscClock c;
+    uint32_t cpu;
+
+    uint64_t mono_0 = monotonic_ns();
+    uint64_t tsc_0 = rdtsc_ordered(cpu);
+    std::this_thread::sleep_for(std::chrono::milliseconds(interval_ms));
+    uint64_t mono_1 = monotonic_ns();
+    uint64_t tsc_1 = rdtsc_ordered(cpu);
+
+    c.ticks_per_ns = static_cast<double>(tsc_1 - tsc_0) / (mono_1 - mono_0);
+    c.ns_per_tick = 1 / c.ticks_per_ns;
+    c.invariant = has_invariant_tsc();
+    c.virtualized = running_under_hypervisor();
+    
+
+    return c;
 }
 
 }  // namespace bus
