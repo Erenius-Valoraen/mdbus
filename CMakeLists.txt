@@ -38,3 +38,7 @@ enable_testing()
 add_executable(test_timing tests/test_timing.cpp)
 target_link_libraries(test_timing PRIVATE bus)
 add_test(NAME timing COMMAND test_timing)
+
+add_executable(test_affinity tests/test_affinity.cpp)
+target_link_libraries(test_affinity PRIVATE bus)
+add_test(NAME affinity COMMAND test_affinity)
