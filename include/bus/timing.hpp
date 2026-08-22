@@ -146,28 +146,21 @@ struct TscClock {
 // before and after, so an overshooting sleep is measured, not assumed. Longer
 // intervals dilute the fixed read-skew between the two clocks: ~30 ns of skew
 // is 3% of a 1 us interval but 0.00003% of a 100 ms one.
-//
-// TODO(S1.3):
-//   1. read tsc and monotonic_ns() back to back  (same order at both ends)
-//   2. sleep for interval_ms
-//   3. read both again, in the same order
-//   4. ticks_per_ns = tick delta / ns delta   (force floating point!)
-//   5. fill in ns_per_tick, and the two CPUID flags
+
 inline TscClock calibrate_tsc(unsigned interval_ms = 100) noexcept {
     TscClock c;
-    uint32_t cpu;
 
     uint64_t mono_0 = monotonic_ns();
-    uint64_t tsc_0 = rdtsc_ordered(cpu);
+    uint64_t tsc_0 = rdtsc_relaxed();
     std::this_thread::sleep_for(std::chrono::milliseconds(interval_ms));
     uint64_t mono_1 = monotonic_ns();
-    uint64_t tsc_1 = rdtsc_ordered(cpu);
+    uint64_t tsc_1 = rdtsc_relaxed();
 
     c.ticks_per_ns = static_cast<double>(tsc_1 - tsc_0) / (mono_1 - mono_0);
-    c.ns_per_tick = 1 / c.ticks_per_ns;
+    c.ns_per_tick = 1.0 / c.ticks_per_ns;
     c.invariant = has_invariant_tsc();
     c.virtualized = running_under_hypervisor();
-    
+
 
     return c;
 }
