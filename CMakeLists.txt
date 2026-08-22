@@ -1,4 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
+# NOTE: the product name lives here and in the docs only. All code uses the
+# neutral `bus` include prefix and namespace, so renaming the project is a
+# one-line change rather than a repo-wide sed.
 project(mdbus LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -13,19 +16,19 @@ endif()
 find_package(Threads REQUIRED)
 
 # -march=native: this is a benchmark of *this* machine, not a portable artifact.
-add_library(mdbus_flags INTERFACE)
-target_compile_options(mdbus_flags INTERFACE
+add_library(bus_flags INTERFACE)
+target_compile_options(bus_flags INTERFACE
   -Wall -Wextra
   $<$<CONFIG:Release>:-O3;-march=native>)
 
 # The library itself is header-only; populated from step S1 onwards.
-add_library(mdbus INTERFACE)
-target_include_directories(mdbus INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(mdbus INTERFACE Threads::Threads mdbus_flags)
+add_library(bus INTERFACE)
+target_include_directories(bus INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(bus INTERFACE Threads::Threads bus_flags)
 
 # The original 2-core ping-pong this project grew out of. Kept buildable so the
 # "atom" of the bus stays runnable as a reference point.
 add_executable(pingpong_legacy legacy/pingpong.cpp)
-target_link_libraries(pingpong_legacy PRIVATE mdbus)
+target_link_libraries(pingpong_legacy PRIVATE bus)
 
 enable_testing()
