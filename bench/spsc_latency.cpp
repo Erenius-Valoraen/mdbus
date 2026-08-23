@@ -41,6 +41,7 @@ struct Config {
     int      producer_core = 4;
     int      consumer_core = 6;
     double   warmup_frac   = 0.10;
+    double   rate_mps      = 0.0;   // 0 = saturation (send as fast as possible)
     std::string out_dir    = "results/spsc";
     bool     write_csv     = true;
 };
@@ -51,6 +52,7 @@ void usage(const char* argv0) {
         "  --messages N        messages to send        (default 5000000)\n"
         "  --producer-core N   CPU for the producer    (default 4)\n"
         "  --consumer-core N   CPU for the consumer    (default 6)\n"
+        "  --rate R            target M msg/s, 0 = saturate (default 0)\n"
         "  --warmup F          fraction discarded      (default 0.10)\n"
         "  --out DIR           output directory        (default results/spsc)\n"
         "  --no-csv            skip writing samples\n"
@@ -67,6 +69,7 @@ bool parse(int argc, char** argv, Config& c) {
         if      (a == "--messages")      c.messages      = std::strtoull(next("--messages"), nullptr, 10);
         else if (a == "--producer-core") c.producer_core = std::atoi(next("--producer-core"));
         else if (a == "--consumer-core") c.consumer_core = std::atoi(next("--consumer-core"));
+        else if (a == "--rate")          c.rate_mps      = std::atof(next("--rate"));
         else if (a == "--warmup")        c.warmup_frac   = std::atof(next("--warmup"));
         else if (a == "--out")           c.out_dir       = next("--out");
         else if (a == "--no-csv")        c.write_csv     = false;
@@ -102,7 +105,11 @@ int main(int argc, char** argv) {
     std::printf("  ring slots     %zu  (%zu B message, %zu KB total)\n",
                 kRingSlots, sizeof(bus::Message), kRingSlots * sizeof(bus::Message) / 1024);
     std::printf("  messages       %llu\n", (unsigned long long)cfg.messages);
-    std::printf("  warmup         %.0f%% discarded\n\n", cfg.warmup_frac * 100.0);
+    std::printf("  warmup         %.0f%% discarded\n", cfg.warmup_frac * 100.0);
+    if (cfg.rate_mps > 0.0)
+        std::printf("  arrival rate   %.2f M msg/s, paced against a fixed schedule\n\n", cfg.rate_mps);
+    else
+        std::printf("  arrival rate   unpaced (saturation)\n\n");
 
     std::vector<uint64_t> latency(cfg.messages);
     std::atomic<uint64_t> gaps{0}, torn{0};
@@ -110,9 +117,21 @@ int main(int argc, char** argv) {
 
     const uint64_t t_start = bus::rdtsc_relaxed();
 
+    // Inter-arrival time in TSC ticks. The schedule is computed from a single
+    // base timestamp rather than "now plus interval" each iteration, so a
+    // producer that falls behind does not quietly reset its own deadline. That
+    // is what makes the latency below coordinated-omission correct: a message
+    // sent late is measured from when it was supposed to be sent.
+    const uint64_t interval = cfg.rate_mps > 0.0
+        ? static_cast<uint64_t>(clk.ticks_per_ns * 1e9 / (cfg.rate_mps * 1e6))
+        : 0;
+
     std::thread producer([&] {
         if (!bus::pin_and_verify(cfg.producer_core)) { pin_failed.store(true); return; }
+        const uint64_t base = bus::rdtsc_relaxed();
         for (uint64_t seq = 0; seq < cfg.messages; ++seq) {
+            const uint64_t intended = base + seq * interval;
+            if (interval) while (bus::rdtsc_relaxed() < intended) {}
             bus::Message m{};
             m.seq       = seq;
             m.price     = 4250000000 + static_cast<int64_t>(seq % 1000);
@@ -124,7 +143,8 @@ int main(int argc, char** argv) {
 
             // Stamped last so the interval measures transport, not the cost of
             // building the payload.
-            m.send_tsc = bus::rdtsc_relaxed();
+            m.send_tsc     = bus::rdtsc_relaxed();
+            m.intended_tsc = interval ? intended : m.send_tsc;
             m.stamp();
 
             while (!ring.try_push(m)) {}   // spin while full: consumer is behind
@@ -141,7 +161,9 @@ int main(int argc, char** argv) {
             if (m.seq != expected) gaps.fetch_add(1, std::memory_order_relaxed);
             if (!m.verify())       torn.fetch_add(1, std::memory_order_relaxed);
 
-            latency[expected] = recv - m.send_tsc;
+            // Measured from the scheduled send time, not the actual one, so
+            // producer lateness is counted rather than hidden.
+            latency[expected] = recv - m.intended_tsc;
         }
     });
 
@@ -172,7 +194,7 @@ int main(int argc, char** argv) {
     bus::print_stats(s, "one-way latency, producer core -> consumer core");
 
     const double mps = static_cast<double>(cfg.messages) / secs / 1e6;
-    std::printf("\nthroughput (saturation -- producer unpaced)\n");
+    std::printf("\nthroughput\n");
     std::printf("    %.2f M msg/s   %.0f MB/s   over %.3f s\n", mps,
                 static_cast<double>(cfg.messages) * sizeof(bus::Message) / secs / 1e6, secs);
 
@@ -187,7 +209,8 @@ int main(int argc, char** argv) {
             std::fprintf(f,
                 "{\n"
                 "  \"transport\": \"spsc_ring\",\n"
-                "  \"mode\": \"saturation\",\n"
+                "  \"mode\": \"%s\",\n"
+                "  \"target_rate_mmsg_s\": %.3f,\n"
                 "  \"messages\": %llu,\n"
                 "  \"message_bytes\": %zu,\n"
                 "  \"ring_slots\": %zu,\n"
@@ -205,6 +228,7 @@ int main(int argc, char** argv) {
                 "  \"p99_ns\": %.1f, \"p999_ns\": %.1f, \"p9999_ns\": %.1f, \"max_ns\": %.1f,\n"
                 "  \"throughput_mmsg_s\": %.3f, \"elapsed_s\": %.3f\n"
                 "}\n",
+                cfg.rate_mps > 0.0 ? "paced" : "saturation", cfg.rate_mps,
                 (unsigned long long)cfg.messages, sizeof(bus::Message), kRingSlots,
                 cfg.producer_core, cfg.consumer_core, Ring::padded ? "true" : "false",
                 cfg.warmup_frac, clk.tsc_freq_mhz(),

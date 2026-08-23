@@ -86,22 +86,47 @@ def main():
     lo, hi = samples.min(), samples.max()
 
     if args.hero:
+        # A compact view of the body of the distribution, for embedding
+        # somewhere narrow. Deliberately clipped at p99: the far tail on an
+        # unisolated machine is dominated by kernel scheduling rather than by
+        # the transport, so showing it here would be showing the operating
+        # system, not the ring.
         plt.rcParams.update({
             "figure.facecolor": "white", "axes.facecolor": "white",
             "axes.edgecolor": ACCENT, "axes.labelcolor": INK, "text.color": INK,
             "xtick.color": INK, "ytick.color": INK, "grid.color": GRID,
             "axes.grid": True, "grid.linewidth": 0.6, "font.size": 11,
         })
-        fig, ax = plt.subplots(figsize=(11, 3.6))
-        percentile_axis(ax, samples)
-        ax.set_title("")
-        sub = "core-to-core latency, one message per point"
+        fig, ax = plt.subplots(figsize=(11, 3.8))
+
+        # Choose the clip point from the data rather than fixing it: take the
+        # highest percentile still within 3x the median, so a tight
+        # distribution is not drawn with most of the axis empty.
+        frac, cut = 95.0, np.percentile(samples, 95)
+        for cand in (97.0, 98.0, 99.0, 99.5, 99.9):
+            v = np.percentile(samples, cand)
+            if v <= 3.0 * p50:
+                frac, cut = cand, v
+        body = samples[samples <= cut]
+        ax.hist(body, bins=260, range=(lo, cut), color=BODY, edgecolor="none")
+        ax.axvline(p50, color=INK, lw=1.4)
+        ax.annotate(f"median {p50:,.0f} ns", (p50, ax.get_ylim()[1] * 0.92),
+                    xytext=(10, 0), textcoords="offset points",
+                    fontsize=11, color=INK, va="top")
+        ax.axvline(lo, color=ACCENT, lw=1.0, ls="--")
+        ax.annotate(f"fastest {lo:,.0f} ns", (lo, ax.get_ylim()[1] * 0.55),
+                    xytext=(10, 0), textcoords="offset points",
+                    fontsize=9.5, color=ACCENT, va="top")
+        ax.set_xlim(lo, cut)
+        ax.set_yticks([])
+        ax.set_xlabel("latency (ns)")
+        title = "core-to-core latency"
         if meta:
-            sub = (f"{meta.get('messages',0):,} messages, core "
-                   f"{meta.get('producer_core','?')} to {meta.get('consumer_core','?')}, "
-                   f"{meta.get('throughput_mmsg_s',0):.1f} M msg/s, "
-                   f"{meta.get('gaps',0)} lost, {meta.get('torn',0)} corrupted")
-        ax.set_title(sub, fontsize=11, pad=10)
+            title = (f"{meta.get('messages',0):,} messages, core "
+                     f"{meta.get('producer_core','?')} to {meta.get('consumer_core','?')}, "
+                     f"{meta.get('gaps',0)} lost, {meta.get('torn',0)} corrupted "
+                     f"({frac:.0f}% of messages shown)")
+        ax.set_title(title, fontsize=11, pad=10)
         fig.tight_layout()
         out.parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(out, dpi=150)
