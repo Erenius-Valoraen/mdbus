@@ -28,7 +28,7 @@ there is real load, real fan-out, and real message sizes.
 | S1 | `timing.hpp` — rdtsc, invariant-TSC check, calibration | ✅ done |
 | S2 | `message.hpp`, `affinity.hpp` | ✅ done |
 | S3 | `spsc_ring.hpp` + tests + TSan | ✅ done |
-| S4 | `stats.hpp`, CSV/meta output, `plots/plot_run.py` | ⬜ |
+| S4 | `stats.hpp`, CSV/meta output, `plots/plot_run.py` | 🔨 stats + output done, plots next |
 | S5 | `spmc_ring.hpp` — broadcast + gap detection | ⬜ |
 | S6 | `source.hpp` — constant / Poisson / Hawkes generator | ⬜ |
 | S7 | `bench/bench_main.cpp` — config-driven runner | ⬜ |

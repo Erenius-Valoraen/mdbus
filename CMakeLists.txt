@@ -31,6 +31,10 @@ target_link_libraries(bus INTERFACE Threads::Threads bus_flags)
 add_executable(pingpong_legacy legacy/pingpong.cpp)
 target_link_libraries(pingpong_legacy PRIVATE bus)
 
+# Benchmarks.
+add_executable(spsc_latency bench/spsc_latency.cpp)
+target_link_libraries(spsc_latency PRIVATE bus)
+
 enable_testing()
 
 # Tests. Each is a standalone binary returning non-zero on failure, registered
