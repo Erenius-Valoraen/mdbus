@@ -27,7 +27,7 @@ there is real load, real fan-out, and real message sizes.
 | S0 | Repo scaffold, CMake, layout | ✅ done |
 | S1 | `timing.hpp` — rdtsc, invariant-TSC check, calibration | ✅ done |
 | S2 | `message.hpp`, `affinity.hpp` | ✅ done |
-| S3 | `spsc_ring.hpp` + tests + TSan | ⬜ |
+| S3 | `spsc_ring.hpp` + tests + TSan | ✅ done |
 | S4 | `stats.hpp`, CSV/meta output, `plots/plot_run.py` | ⬜ |
 | S5 | `spmc_ring.hpp` — broadcast + gap detection | ⬜ |
 | S6 | `source.hpp` — constant / Poisson / Hawkes generator | ⬜ |
