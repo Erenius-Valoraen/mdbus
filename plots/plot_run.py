@@ -74,6 +74,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("run_dir", type=pathlib.Path)
     ap.add_argument("-o", "--out", type=pathlib.Path, default=None)
+    ap.add_argument("--hero", action="store_true",
+                    help="write a single wide percentile panel instead of the "
+                         "four-panel view, for embedding somewhere narrow")
     args = ap.parse_args()
 
     samples, meta = load(args.run_dir)
@@ -81,6 +84,29 @@ def main():
 
     p50, p90, p99, p999 = np.percentile(samples, [50, 90, 99, 99.9])
     lo, hi = samples.min(), samples.max()
+
+    if args.hero:
+        plt.rcParams.update({
+            "figure.facecolor": "white", "axes.facecolor": "white",
+            "axes.edgecolor": ACCENT, "axes.labelcolor": INK, "text.color": INK,
+            "xtick.color": INK, "ytick.color": INK, "grid.color": GRID,
+            "axes.grid": True, "grid.linewidth": 0.6, "font.size": 11,
+        })
+        fig, ax = plt.subplots(figsize=(11, 3.6))
+        percentile_axis(ax, samples)
+        ax.set_title("")
+        sub = "core-to-core latency, one message per point"
+        if meta:
+            sub = (f"{meta.get('messages',0):,} messages, core "
+                   f"{meta.get('producer_core','?')} to {meta.get('consumer_core','?')}, "
+                   f"{meta.get('throughput_mmsg_s',0):.1f} M msg/s, "
+                   f"{meta.get('gaps',0)} lost, {meta.get('torn',0)} corrupted")
+        ax.set_title(sub, fontsize=11, pad=10)
+        fig.tight_layout()
+        out.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(out, dpi=150)
+        print(f"wrote {out}")
+        return
 
     plt.rcParams.update({
         "figure.facecolor": "white", "axes.facecolor": "white",
