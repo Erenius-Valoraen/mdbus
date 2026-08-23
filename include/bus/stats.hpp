@@ -77,9 +77,8 @@ inline void print_stats(const Stats& s, const char* label) {
 }
 
 // One row per sample: consumer_id, sample_ns. Written after the run, never
-// during. `ticks` is expected to be the already-sorted vector from summarise;
-// sample order is not preserved, which is fine for distribution plots and
-// wrong for time-series ones -- pass the unsorted copy if you need those.
+// during. Call this BEFORE summarise(), which sorts in place: the plots need
+// arrival order for the time-series panel, and a sorted file cannot provide it.
 inline bool write_samples_csv(const std::string& path,
                               const std::vector<uint64_t>& ticks,
                               const TscClock& clk,

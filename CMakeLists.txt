@@ -35,6 +35,12 @@ target_link_libraries(pingpong_legacy PRIVATE bus)
 add_executable(spsc_latency bench/spsc_latency.cpp)
 target_link_libraries(spsc_latency PRIVATE bus)
 
+# Same benchmark with the two ring cursors packed into one cache line, so the
+# cost of false sharing is measured rather than asserted (experiment E5).
+add_executable(spsc_latency_nopad bench/spsc_latency.cpp)
+target_link_libraries(spsc_latency_nopad PRIVATE bus)
+target_compile_definitions(spsc_latency_nopad PRIVATE BUS_NO_PADDING)
+
 enable_testing()
 
 # Tests. Each is a standalone binary returning non-zero on failure, registered

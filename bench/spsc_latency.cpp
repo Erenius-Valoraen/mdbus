@@ -162,6 +162,12 @@ int main(int argc, char** argv) {
     const size_t skip = static_cast<size_t>(cfg.warmup_frac * static_cast<double>(cfg.messages));
     std::vector<uint64_t> kept(latency.begin() + static_cast<long>(skip), latency.end());
 
+    // CSV first: summarise() sorts in place, and the plots need arrival order
+    // for the time-series panel.
+    bool csv_ok = true;
+    const std::string csv = cfg.out_dir + "/latency.csv";
+    if (cfg.write_csv) csv_ok = bus::write_samples_csv(csv, kept, clk);
+
     const bus::Stats s = bus::summarise(kept, clk);   // sorts `kept` in place
     bus::print_stats(s, "one-way latency, producer core -> consumer core");
 
@@ -171,12 +177,11 @@ int main(int argc, char** argv) {
                 static_cast<double>(cfg.messages) * sizeof(bus::Message) / secs / 1e6, secs);
 
     if (cfg.write_csv) {
-        const std::string csv  = cfg.out_dir + "/latency.csv";
-        const std::string meta = cfg.out_dir + "/run_meta.json";
-        if (!bus::write_samples_csv(csv, kept, clk)) {
+        if (!csv_ok) {
             std::fprintf(stderr, "could not write %s\n", csv.c_str());
             return 1;
         }
+        const std::string meta = cfg.out_dir + "/run_meta.json";
         std::FILE* f = std::fopen(meta.c_str(), "w");
         if (f) {
             std::fprintf(f,
