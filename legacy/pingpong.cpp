@@ -42,7 +42,7 @@ void pin_to_core(int core) {
     pthread_setaffinity_np(pthread_self(), sizeof(set), &set);
 }
 
-int main() {
+int main(int argc, char* argv[]) {
     const int ring_length = 4;
     std::atomic<int> ring1[ring_length] = {0, 0, 0, 0};
     std::atomic<int> ring2[ring_length] = {0, 0, 0, 0};
@@ -105,6 +105,6 @@ int main() {
     std::cout << ring1 << "\n";
     std::cout << ring2 << "\n";
 
-    std::ofstream out("samples.csv");
+    std::ofstream out(argv[1]);
     for (double s : ns_times) out << s << "\n";
 }
