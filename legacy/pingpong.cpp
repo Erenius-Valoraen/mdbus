@@ -7,6 +7,8 @@
 #include <chrono>
 #include <fstream>
 
+#include "bus/timing.hpp"
+
 template <size_t N>
 std::ostream& operator<<(std::ostream& os, const std::atomic<int>(&arr)[N]) {
     os << "[";
@@ -45,7 +47,7 @@ int main() {
     std::atomic<int> ring1[ring_length] = {0, 0, 0, 0};
     std::atomic<int> ring2[ring_length] = {0, 0, 0, 0};
     const int N = 1000000;
-    std::vector<double> samples(N);
+    std::vector<uint64_t> samples(N);
 
 
     std::thread a([&] {
@@ -53,15 +55,16 @@ int main() {
         int i = 0;
         int HOPS = 0;
         int val = 1;
+        uint32_t cpu_id = 0;
         while (HOPS < N) {
-            auto t1 = std::chrono::steady_clock::now();
+            uint64_t start_tick = bus::rdtsc_ordered(cpu_id);
 
             ring1[i].store(val); // send the ping
             while (ring2[i].load() != val + 1) {} // wait for the pong
 
-            auto t2 = std::chrono::steady_clock::now();
+            uint64_t end_tick = bus::rdtsc_ordered(cpu_id);
 
-            samples[HOPS] = std::chrono::duration<double, std::nano>(t2 - t1).count();
+            samples[HOPS] = end_tick - start_tick;
 
             val = ring2[i].load() + 1;  // Update the value according to the received pong
             i = (i + 1) % ring_length; // get the next index or wrap around
@@ -92,9 +95,16 @@ int main() {
     a.join();
     b.join();
 
+    bus::TscClock ns_clock = bus::calibrate_tsc(100);
+    std::vector<double> ns_times(N);
+
+    for (int i = 0; i < N; i++) {
+        ns_times[i] = ns_clock.to_ns(samples[i]);
+    }
+
     std::cout << ring1 << "\n";
     std::cout << ring2 << "\n";
 
     std::ofstream out("samples.csv");
-    for (double s : samples) out << s << "\n";
+    for (double s : ns_times) out << s << "\n";
 }

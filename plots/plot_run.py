@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """Four-panel view of a single benchmark run.
 
-    python plots/plot_run.py results/spsc_padded [-o results/spsc_padded/latency.png]
+    python plots/plot_run.py results/spsc_paced          # a run directory
+    python plots/plot_run.py samples.csv -o out.png      # a bare CSV
 
-Reads latency.csv (consumer_id, sample_ns) and run_meta.json from the given
-directory. The CSV is written in arrival order, which the time-series panel
-needs, so nothing here may sort the array in place before that panel is drawn.
+Given a directory, reads latency.csv (consumer_id, sample_ns) plus run_meta.json.
+Given a file, reads it directly and accepts either that two-column form or a
+single column of nanoseconds per line, which is what the legacy ping-pong
+writes. Sample order is arrival order in both cases, which the time-series panel
+needs, so nothing here may sort in place before that panel is drawn.
 """
 
 import argparse
@@ -25,16 +28,57 @@ GRID  = "#d8d8d8"
 ACCENT= "#7a7a7a"
 
 
-def load(run_dir: pathlib.Path):
-    csv = run_dir / "latency.csv"
-    if not csv.exists():
-        sys.exit(f"no latency.csv in {run_dir}")
-    samples = np.loadtxt(csv, delimiter=",", skiprows=1, usecols=1)
-    meta = {}
-    meta_path = run_dir / "run_meta.json"
-    if meta_path.exists():
-        meta = json.loads(meta_path.read_text())
-    return samples, meta
+def read_samples(csv: pathlib.Path):
+    """Accept either `consumer_id,sample_ns` with a header, or one bare
+    nanosecond value per line."""
+    first = csv.open().readline().strip()
+    has_header = any(c.isalpha() for c in first)
+    ncols = first.count(",") + 1
+    if ncols >= 2:
+        return np.loadtxt(csv, delimiter=",", skiprows=1 if has_header else 0, usecols=1)
+    return np.loadtxt(csv, skiprows=1 if has_header else 0)
+
+
+def load(target: pathlib.Path):
+    if target.is_dir():
+        csv = target / "latency.csv"
+        if not csv.exists():
+            sys.exit(f"no latency.csv in {target}")
+        meta_path = target / "run_meta.json"
+        meta = json.loads(meta_path.read_text()) if meta_path.exists() else {}
+        return read_samples(csv), meta
+    if not target.exists():
+        sys.exit(f"no such file: {target}")
+    return read_samples(target), {}
+
+
+
+def quantum(samples):
+    """Smallest gap between distinct observed values.
+
+    Latencies derive from a tick counter, so they are quantised: on this
+    machine roughly 0.343 ns. Binning at a width that is not a whole multiple
+    of that puts two tick values in some bins and one in their neighbours,
+    which renders as a comb and hides the real shape.
+    """
+    u = np.unique(samples)
+    if u.size < 2:
+        return 0.0
+    d = np.diff(u)
+    d = d[d > 0]
+    return float(d.min()) if d.size else 0.0
+
+
+def aligned_bins(lo, hi, q, target=220):
+    """Bin edges that are a whole number of quanta wide and sit on quantum
+    boundaries, so every bin holds the same number of representable values."""
+    if q <= 0 or not np.isfinite(q) or hi <= lo:
+        return target
+    width = max(q, (hi - lo) / target)
+    width = max(1, round(width / q)) * q
+    start = np.floor(lo / q) * q - q / 2
+    n = int(np.ceil((hi - start) / width)) + 1
+    return start + np.arange(n + 1) * width
 
 
 def percentile_axis(ax, samples):
@@ -72,15 +116,21 @@ def percentile_axis(ax, samples):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("run_dir", type=pathlib.Path)
+    ap.add_argument("target", type=pathlib.Path,
+                    help="a run directory, or a CSV file of samples")
     ap.add_argument("-o", "--out", type=pathlib.Path, default=None)
     ap.add_argument("--hero", action="store_true",
                     help="write a single wide percentile panel instead of the "
                          "four-panel view, for embedding somewhere narrow")
     args = ap.parse_args()
 
-    samples, meta = load(args.run_dir)
-    out = args.out or (args.run_dir / "latency.png")
+    samples, meta = load(args.target)
+    if args.out:
+        out = args.out
+    elif args.target.is_dir():
+        out = args.target / "latency.png"
+    else:
+        out = args.target.with_suffix(".png")
 
     p50, p90, p99, p999 = np.percentile(samples, [50, 90, 99, 99.9])
     lo, hi = samples.min(), samples.max()
@@ -120,7 +170,7 @@ def main():
         ax.set_xlim(lo, cut)
         ax.set_yticks([])
         ax.set_xlabel("latency (ns)")
-        title = "core-to-core latency"
+        title = f"{len(samples):,} samples ({frac:.0f}% shown)"
         if meta:
             title = (f"{meta.get('messages',0):,} messages, core "
                      f"{meta.get('producer_core','?')} to {meta.get('consumer_core','?')}, "
@@ -149,10 +199,14 @@ def main():
 
     # body of the distribution, linear
     ax = axes[0, 0]
-    ax.hist(samples, bins=250, range=(lo, p99), color=BODY, edgecolor="none")
+    q = quantum(samples)
+    body_hi = np.percentile(samples, 99)
+    ax.hist(samples, bins=aligned_bins(lo, body_hi, q), range=(lo, body_hi),
+            color=BODY, edgecolor="none")
     marks(ax)
-    ax.set_xlim(lo, p99)
-    ax.set_title(f"distribution, linear, clipped at p99")
+    ax.set_xlim(lo, body_hi)
+    ax.set_title("body of the distribution, linear, clipped at p99 "
+                 f"(bins aligned to the {q:.3f} ns tick)")
     ax.set_xlabel("latency (ns)"); ax.set_ylabel("count")
     ax.legend(frameon=False, fontsize=9)
 
@@ -161,14 +215,36 @@ def main():
 
     # full range, log x
     ax = axes[1, 0]
-    ax.hist(samples, bins=np.logspace(np.log10(max(lo, 1)), np.log10(hi), 250),
-            color=BODY, edgecolor="none")
-    ax.set_xscale("log")
-    ax.set_yscale("log")
+    edges = np.logspace(np.log10(max(lo, 1e-9)), np.log10(hi), 160)
+    counts, edges = np.histogram(samples, bins=edges)
+    centres = np.sqrt(edges[:-1] * edges[1:])
+    ax.fill_between(centres, 0.5, np.maximum(counts, 0.5), step="mid",
+                    color=BODY, alpha=0.55, linewidth=0)
+    ax.step(centres, np.maximum(counts, 0.5), where="mid", color=BODY, lw=1.0)
+    # A bin holding one sample is a one-pixel bar on a log axis and reads as
+    # empty space. Mark every non-empty bin so sparse tail observations are
+    # actually visible.
+    nz = counts > 0
+    ax.plot(centres[nz], counts[nz], "o", ms=2.6, color=TAIL, zorder=4,
+            label="occupied bin")
+    ax.set_xscale("log"); ax.set_yscale("log")
+    ax.set_ylim(0.5, max(counts.max() * 1.6, 2))
     marks(ax)
-    ax.set_title("distribution, log-log, full range (tail visible)")
+    ax.set_title("full range, log-log (every occupied bin marked)")
     ax.set_xlabel("latency (ns)"); ax.set_ylabel("count")
-    ax.legend(frameon=False, fontsize=9)
+
+    # How much actually lives out there, in words rather than pixels.
+    n = samples.size
+    notes = []
+    for thr, lbl in [(1e3, "1 us"), (1e4, "10 us"), (1e5, "100 us")]:
+        c = int((samples > thr).sum())
+        if c:
+            notes.append(f"> {lbl}: {c:,} ({100.0 * c / n:.4f}%)")
+    if notes:
+        ax.text(0.985, 0.95, "\n".join(notes), transform=ax.transAxes,
+                ha="right", va="top", fontsize=8.5, color=INK,
+                bbox=dict(boxstyle="round,pad=0.35", fc="white", ec=GRID, lw=0.6))
+    ax.legend(frameon=False, fontsize=9, loc="upper left")
 
     # arrival order, so bursts and drift are visible
     ax = axes[1, 1]
