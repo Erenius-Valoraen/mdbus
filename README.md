@@ -338,6 +338,16 @@ waiting for an event that arrives in 100 ns would cost more than it saves. It
 is there to be polite to a hyperthread sibling and to save power, and on a
 dedicated core it is the wrong instruction.
 
+![variant comparison](results/variants/variants.png)
+
+Neither axis reaches the extreme end. Every variant still records a worst case
+between 20 and 60 microseconds, and the right-hand panel puts that in
+proportion: 2.9% of messages exceed 200 ns, 0.07% exceed a microsecond, and
+fewer than one in a hundred thousand exceed 50. Those are rare enough to look
+like a rounding error and frequent enough to matter, since at ten million
+messages a second a one-in-two-hundred-thousand event happens about fifty times
+a second.
+
 The isolation is applied at runtime rather than through the kernel command
 line, via `scripts/fix_env.sh`: a cgroup v2 cpuset partition in `isolated` mode
 removes the cores from scheduler load balancing the way `isolcpus` does, every
