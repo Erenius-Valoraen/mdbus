@@ -58,15 +58,15 @@ int main(int argc, char* argv[]) {
         uint32_t cpu_id = 0;
         while (HOPS < N) {
             uint64_t start_tick = bus::rdtsc_ordered(cpu_id);
-
-            ring1[i].store(val); // send the ping
+            
+            ring1[i].store(val, std::memory_order_release); // send the ping
             while (ring2[i].load() != val + 1) {} // wait for the pong
 
             uint64_t end_tick = bus::rdtsc_ordered(cpu_id);
 
             samples[HOPS] = end_tick - start_tick;
 
-            val = ring2[i].load() + 1;  // Update the value according to the received pong
+            val = ring2[i].load(std::memory_order_acquire) + 1;  // Update the value according to the received pong
             i = (i + 1) % ring_length; // get the next index or wrap around
             HOPS++;
             // next iteration automatically sends the ping again          

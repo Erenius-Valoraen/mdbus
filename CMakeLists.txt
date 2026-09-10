@@ -41,6 +41,9 @@ add_executable(spsc_latency_nopad bench/spsc_latency.cpp)
 target_link_libraries(spsc_latency_nopad PRIVATE bus)
 target_compile_definitions(spsc_latency_nopad PRIVATE BUS_NO_PADDING)
 
+add_executable(pingpong_variants bench/pingpong_variants.cpp)
+target_link_libraries(pingpong_variants PRIVATE bus)
+
 enable_testing()
 
 # Tests. Each is a standalone binary returning non-zero on failure, registered
