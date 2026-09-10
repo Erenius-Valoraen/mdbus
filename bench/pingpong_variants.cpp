@@ -23,13 +23,38 @@ constexpr uint64_t kHops  = 400'000;
 constexpr int      kCoreA = 4;
 constexpr int      kCoreB = 6;
 
-struct Res { double min, p50, p90, p99, p999, max; };
+struct Res { double min, p50, p90, p99, p999, p9999, max; };
+
+// Set from the command line: when non-empty, each variant's raw samples are
+// written to <dir>/<tag>.<variant>.csv for plotting.
+std::string g_dump_dir, g_tag;
+const char* g_dump_variant = nullptr;
+
+void dump(const char* variant, const std::vector<uint64_t>& ticks,
+          const bus::TscClock& clk);
+
+void dump_impl(const char* variant, const std::vector<uint64_t>& ticks,
+          const bus::TscClock& clk) {
+    if (g_dump_dir.empty()) return;
+    std::string name(variant);
+    for (char& c : name) if (c == ' ' || c == '/') c = '_';
+    const std::string path = g_dump_dir + "/" + g_tag + "." + name + ".csv";
+    std::FILE* f = std::fopen(path.c_str(), "w");
+    if (!f) { std::fprintf(stderr, "cannot write %s\n", path.c_str()); return; }
+    for (uint64_t t : ticks) std::fprintf(f, "%.1f\n", clk.to_ns(t));
+    std::fclose(f);
+}
+
+void dump(const char* variant, const std::vector<uint64_t>& ticks,
+          const bus::TscClock& clk) { dump_impl(variant, ticks, clk); }
 
 Res summarise(std::vector<uint64_t> v, const bus::TscClock& c) {
     v.erase(v.begin(), v.begin() + v.size() / 10);
     std::sort(v.begin(), v.end());
     auto q = [&](double p) { return c.to_ns(v[(size_t)(p * (v.size() - 1))]); };
-    return {c.to_ns(v.front()), q(.5), q(.9), q(.99), q(.999), c.to_ns(v.back())};
+    if (g_dump_variant) dump(g_dump_variant, v, c);
+    return {c.to_ns(v.front()), q(.5), q(.9), q(.99), q(.999), q(.9999),
+            c.to_ns(v.back())};
 }
 
 // ---------------------------------------------------------------------------
@@ -299,6 +324,8 @@ struct Variant { const char* name; Res (*fn)(const bus::TscClock&); const char* 
 
 int main(int argc, char** argv) {
     const int reps = argc > 1 ? std::atoi(argv[1]) : 3;
+    if (argc > 3) { g_dump_dir = argv[2]; g_tag = argv[3]; }
+    else if (argc > 2) { g_dump_dir = argv[2]; g_tag = "run"; }
     const bus::TscClock clk = bus::calibrate_tsc(100);
 
     Variant vs[] = {
@@ -322,8 +349,10 @@ int main(int argc, char** argv) {
             std::swap(order[i], order[j]);
         }
         for (int k = 0; k < NV; ++k) {
-            std::fprintf(stderr, "\rrep %d/%d: %-14s", r + 1, reps, vs[order[k]].name);
-            all[order[k]].push_back(vs[order[k]].fn(clk));
+            const int v = order[k];
+            std::fprintf(stderr, "\rrep %d/%d: %-14s", r + 1, reps, vs[v].name);
+            g_dump_variant = (r == reps - 1) ? vs[v].name : nullptr;
+            all[v].push_back(vs[v].fn(clk));
         }
     }
     std::fprintf(stderr, "\r%40s\r", "");
@@ -332,18 +361,20 @@ int main(int argc, char** argv) {
         std::sort(x.begin(), x.end());
         return x[x.size() / 2];
     };
-    std::printf("%-14s %8s %8s %8s %8s %9s %10s   %s\n",
-                "variant", "min", "p50", "p90", "p99", "p99.9", "p99/p50", "change");
-    std::printf("%s\n", std::string(100, '-').c_str());
+    std::printf("%-14s %7s %7s %7s %7s %8s %9s %10s %8s   %s\n",
+                "variant", "min", "p50", "p90", "p99", "p99.9", "p99.99",
+                "max", "p99/p50", "change");
+    std::printf("%s\n", std::string(118, '-').c_str());
     for (int i = 0; i < NV; ++i) {
-        std::vector<double> mn, p50, p90, p99, p999;
+        std::vector<double> mn, p50, p90, p99, p999, p9999, mx;
         for (const Res& r : all[i]) {
             mn.push_back(r.min); p50.push_back(r.p50); p90.push_back(r.p90);
             p99.push_back(r.p99); p999.push_back(r.p999);
+            p9999.push_back(r.p9999); mx.push_back(r.max);
         }
-        std::printf("%-14s %8.1f %8.1f %8.1f %8.1f %9.1f %10.2f   %s\n",
+        std::printf("%-14s %7.1f %7.1f %7.1f %7.1f %8.1f %9.1f %10.1f %8.2f   %s\n",
                     vs[i].name, med(mn), med(p50), med(p90), med(p99), med(p999),
-                    med(p99) / med(p50), vs[i].what);
+                    med(p9999), med(mx), med(p99) / med(p50), vs[i].what);
     }
     std::printf("\nmedian of %d repetitions, %llu hops each, cores %d <-> %d\n",
                 reps, (unsigned long long)kHops, kCoreA, kCoreB);
