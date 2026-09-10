@@ -299,6 +299,54 @@ of locking. It is the backlog, and it is the failure mode that matters in practi
 because the moment a feed handler falls behind is a burst, and a burst is when being
 late is expensive.
 
+## Two axes, measured separately
+
+The ping-pong this project grew out of is still in `legacy/`, and it turned out
+to be a good vehicle for separating two questions that are easy to conflate:
+how much of the latency is the code, and how much is the machine it runs on.
+
+Seven variants of the same protocol were run in one process under identical
+conditions, with the variant order shuffled between repetitions so a warming
+machine could not be mistaken for a faster variant. Then the whole set was run
+again with the two cores isolated at runtime.
+
+| | p50 | p99 | p99.9 |
+|---|---|---|---|
+| original code, ordinary machine | 190 ns | 355 ns | 2511 ns |
+| tuned code, ordinary machine | 112 ns | 180 ns | 2384 ns |
+| original code, isolated cores | 95 ns | 165 ns | 496 ns |
+| tuned code, isolated cores | **90 ns** | **101 ns** | **347 ns** |
+
+Read down the two middle rows and the split is clean. Code changes moved the
+body a long way and the tail not at all: every variant, including the original,
+landed between 2383 and 2511 ns at p99.9 on an ordinary machine. Isolation
+moved the tail by a factor of five to eight and the body comparatively little.
+They are close to orthogonal, and neither substitutes for the other.
+
+What the code changes were, in order of contribution: replacing the default
+sequentially consistent atomics with release and acquire, which on x86 turns a
+locked exchange into a plain store; hoisting a redundant load out of the
+consumer's spin loop, since the value it re-read every iteration was one only
+that thread could write; and storing each latency sample with a non-temporal
+write so the three megabytes of results streaming past do not evict the ring's
+cache line. Two things that did nothing: forcing both rings into one aligned
+struct, and reducing the ring to a single slot.
+
+Notably `_mm_pause()`, which is the standard advice for a spin loop, measures
+**39 ns** on this processor, roughly 190 cycles. Dropping one into a loop
+waiting for an event that arrives in 100 ns would cost more than it saves. It
+is there to be polite to a hyperthread sibling and to save power, and on a
+dedicated core it is the wrong instruction.
+
+The isolation is applied at runtime rather than through the kernel command
+line, via `scripts/fix_env.sh`: a cgroup v2 cpuset partition in `isolated` mode
+removes the cores from scheduler load balancing the way `isolcpus` does, every
+movable interrupt is steered elsewhere, and the process runs at a real-time
+priority. The benchmark cores had been absorbing over 400,000 interrupts each,
+which is most likely what the 2400 ns floor was. The one piece with no runtime
+equivalent is `nohz_full`, since the periodic scheduler tick needs a boot
+parameter to stop.
+
 ## Where things live
 
 ```

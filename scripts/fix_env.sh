@@ -89,7 +89,8 @@ apply() {
 
 restore() {
     [ -f "$STATE" ] || return 0
-    local kind key val restored=0
+    local kind key val restored=0 nirq
+    nirq=$(grep -c '^irq:' "$STATE" || true)
     while IFS=: read -r kind key val; do
         case "$kind" in
             scaling_governor|energy_performance_preference)
@@ -101,7 +102,7 @@ restore() {
     done < "$STATE"
     [ -d "$BENCH" ] && { echo member > $BENCH/cpuset.cpus.partition 2>/dev/null || true; rmdir "$BENCH" 2>/dev/null || true; }
     rm -f "$STATE"
-    say "restored: governor, $(grep -c '^irq:' /dev/null 2>/dev/null || echo all) IRQ masks, cpuset removed"
+    say "restored: governor and EPP, $nirq IRQ masks, cpuset partition removed"
 }
 
 show() {
