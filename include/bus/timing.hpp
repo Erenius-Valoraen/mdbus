@@ -63,11 +63,6 @@ inline uint64_t rdtsc_ordered(uint32_t& cpu_id) noexcept {
 // so __get_cpuid's return value has to be honoured -- on a CPU without the leaf
 // the output variables are left untouched, and reading them would be reading
 // uninitialised memory.
-//
-// TODO(S1.2):
-//   1. declare four unsigned variables for the output registers
-//   2. call __get_cpuid with leaf 0x80000007; if it returns 0, return false
-//   3. return bit 8 of edx as a bool
 inline bool has_invariant_tsc() noexcept {
     unsigned eax, ebx, ecx, edx;
     if (!__get_cpuid(0x80000007,&eax, &ebx, &ecx, &edx)) {
@@ -83,8 +78,6 @@ inline bool has_invariant_tsc() noexcept {
 // is a virtual CPU that the host may schedule anywhere and preempt at any time
 // -- invisible from inside the guest, and a direct contributor to the latency
 // tail this project measures. Not a failure; a caveat worth printing.
-//
-// TODO(S1.2): same shape as above, but a standard leaf and a different bit.
 inline bool running_under_hypervisor() noexcept {
     unsigned eax, ebx, ecx, edx;
     if (!__get_cpuid(0x1, &eax, &ebx, &ecx, &edx)) {
@@ -107,11 +100,6 @@ inline bool running_under_hypervisor() noexcept {
 //
 // MONOTONIC rather than REALTIME: REALTIME is wall-clock time and can step
 // backwards when NTP corrects it, which would make a duration negative.
-//
-// TODO(S1.3):
-//   1. declare a `timespec ts;`
-//   2. clock_gettime(CLOCK_MONOTONIC, &ts);
-//   3. return seconds converted to ns, plus the ns field
 inline uint64_t monotonic_ns() noexcept {
     timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);

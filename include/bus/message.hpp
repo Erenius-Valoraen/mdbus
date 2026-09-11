@@ -44,12 +44,6 @@ struct alignas(64) Message {
 
     // The fields above total 48 bytes, leaving 16 before the cache line is
     // full.
-    //
-    // TODO(S2.2): add a checksum field, and explicit padding to fill the line.
-    //   Explicit padding rather than letting the compiler add it silently: the
-    //   bytes exist either way, but named padding can be zeroed, which keeps
-    //   byte-for-byte comparison of two messages meaningful and stops
-    //   uninitialised stack bytes from travelling around.
 
     // Compute a checksum over every OTHER field. Must not include the checksum
     // field itself, or verification can never succeed.
@@ -63,8 +57,6 @@ struct alignas(64) Message {
     // order-insensitive, so two fields swapping values leaves it unchanged.
     // Mix instead: fold each field in with a multiply by a large odd constant
     // and a shift/xor, so every input bit can affect every output bit.
-    //
-    // TODO(S2.2): implement.
     uint64_t compute_checksum() const noexcept {
         uint64_t h = 0xcbf29ce484222325ULL;
         auto mix = [&h](uint64_t v) noexcept {
@@ -83,12 +75,10 @@ struct alignas(64) Message {
         return h; 
     }
 
-    // TODO(S2.2): stamp the computed checksum into the field.
     void stamp() noexcept {
         checksum = compute_checksum();
     }
 
-    // TODO(S2.2): true if the stored checksum matches a freshly computed one.
     bool verify() const noexcept {
         return checksum == compute_checksum();
     }
