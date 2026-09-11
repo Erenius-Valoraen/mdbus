@@ -35,7 +35,14 @@ def load(d: pathlib.Path):
         if "." not in f.stem:
             continue
         tag, variant = f.stem.split(".", 1)
-        s = np.loadtxt(f)
+        # accept either a bare column of nanoseconds or consumer_id,sample_ns
+        first = f.open().readline().strip()
+        skip = 1 if any(c.isalpha() for c in first) else 0
+        if first.count(",") >= 1:
+            s = np.loadtxt(f, delimiter=",", skiprows=skip, usecols=1)
+        else:
+            s = np.loadtxt(f, skiprows=skip)
+        s = np.atleast_1d(s)
         out[tag][variant.replace("_", " ")] = s[int(len(s) * WARMUP):]
     return out
 

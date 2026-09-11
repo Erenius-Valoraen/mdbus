@@ -299,65 +299,75 @@ of locking. It is the backlog, and it is the failure mode that matters in practi
 because the moment a feed handler falls behind is a burst, and a burst is when being
 late is expensive.
 
-## Two axes, measured separately
+## What sets the tail
 
 Tail latency is set by two things that are easy to confuse: the code, and the
-machine the code runs on. Running the bus under two machine configurations
-separates them, and they turn out to be close to orthogonal.
+machine the code runs on. Running the same binary under two machine
+configurations separates them, and on this hardware they barely interact.
 
-Two million messages, paced at one million a second so the ring never backs up,
-producer on core 4 and consumer on core 6:
+![environment comparison](results/bus/environment.png)
+
+Both curves are the same code, two million messages each, paced at one message
+per microsecond so the ring never backs up. They are indistinguishable through
+p90 and then diverge by a factor of thirty-three.
 
 | | ordinary machine | isolated cores | |
 |---|---|---|---|
-| min | 64 ns | 61 ns | |
 | p50 | 125 ns | 123 ns | unchanged |
 | p90 | 140 ns | 128 ns | 1.1x |
-| p99 | 842 ns | 136 ns | **6.2x** |
-| p99.9 | 12.9 us | 1.5 us | **8.8x** |
+| p99 | 842 ns | 136 ns | 6.2x |
+| p99.9 | 12.9 us | 1.5 us | 8.8x |
 | p99.99 | 251 us | 6.9 us | **36.7x** |
 | max | 415 us | 70 us | 5.9x |
 
-The median does not move at all and the far tail improves by a factor of
-thirty-seven. Nothing about the code changed between those two columns. The
-isolation is applied at runtime by `scripts/fix_env.sh`: a cgroup v2 cpuset
-partition in `isolated` mode takes the cores out of scheduler load balancing
-the way `isolcpus` does but reversibly, every movable interrupt is steered
-elsewhere, and the process runs at a real-time priority. The two cores had been
-absorbing over 400,000 interrupts each.
+The isolation is applied at runtime by `scripts/fix_env.sh`, not through the
+kernel command line. A cgroup v2 cpuset partition in `isolated` mode takes the
+cores out of scheduler load balancing the way `isolcpus` does but reversibly,
+every movable interrupt is steered elsewhere, and the process runs at a
+real-time priority. The two cores had been absorbing over 400,000 interrupts
+each. The one piece with no runtime equivalent is `nohz_full`, since stopping
+the periodic scheduler tick needs a boot parameter, and that is the most likely
+source of what remains.
 
-The other direction was measured on the two-core ping-pong in `legacy/`, which
-is small enough that a code change has nowhere to hide. Seven variants ran in
-one process with the order shuffled between repetitions, so a warming machine
-could not be mistaken for a faster variant. Release and acquire in place of the
-default sequentially consistent atomics, which on x86 turns a locked exchange
-into a plain store; hoisting a redundant load out of the consumer's spin loop,
-since the value it re-read every iteration was one only that thread could
-write; and a non-temporal store for each latency sample, so the results
-streaming past do not evict the ring's cache line. Together those took the
-median from 190 to 112 ns and left p99.9 within noise of 2400 ns for every
-variant including the unmodified one.
+### The other direction
 
-Two changes that did nothing: forcing both rings into one aligned struct, and
-reducing the ring to a single slot.
+Code changes were measured on the two-core ping-pong in `legacy/`, which is
+small enough that a change has nowhere to hide. Seven variants ran in one
+process with the order shuffled between repetitions, so a warming machine could
+not be mistaken for a faster variant.
+
+Three things helped. Release and acquire in place of the default sequentially
+consistent atomics, which on x86 turns a locked exchange into a plain store.
+Hoisting a redundant load out of the consumer's spin loop, since the value it
+re-read every iteration was one only that thread could write. And a
+non-temporal store for each latency sample, so the results streaming past do
+not evict the ring's cache line. Together they took the median from 190 to
+112 ns while p99.9 stayed within noise of 2400 ns for every variant including
+the unmodified one.
+
+Two changes did nothing measurable: forcing both rings into one aligned struct,
+and reducing the ring to a single slot.
 
 `_mm_pause()` is the standard advice for a spin loop and measures **39 ns** on
-this processor, roughly 190 cycles. Waiting for an event that arrives in 100 ns,
-it costs more than it saves. Its purpose is to be polite to a hyperthread
-sibling and to save power, and on a dedicated core neither applies.
+this processor, roughly 190 cycles. Waiting for something that arrives in
+100 ns, it costs more than it saves. Its purpose is to be polite to a
+hyperthread sibling and to save power, and on a dedicated core neither applies.
 
 ![variant comparison](results/variants/variants.png)
 
-Neither axis reaches the extreme end. The bus still records a 70 microsecond
-worst case with the cores isolated, and the right-hand panel puts the tail in
-proportion: 2.9% of messages exceed 200 ns, 0.07% exceed a microsecond, and
-fewer than one in a hundred thousand exceed 50. Rare enough to look like a
-rounding error, frequent enough to matter, since at ten million messages a
-second a one-in-two-hundred-thousand event happens about fifty times a second.
+### Throughput is power-limited here, so this repo does not quote a rate
 
-The one piece of isolation with no runtime equivalent is `nohz_full`, since
-stopping the periodic scheduler tick needs a kernel command line parameter.
-That is the most likely source of what remains.
+Saturating the ring measured anywhere between 7 and 21 million messages a
+second depending on when the measurement was taken, which turned out to have
+nothing to do with the code. This laptop's firmware sets a sustained power limit
+of 15 W against a 64 W burst limit, so a short benchmark runs inside the burst
+window at high clock and a longer one settles to 1600 MHz. Temperatures stay
+around 50 C, so it is a power cap rather than thermal throttling.
+
+The latency figures above are unaffected because a run paced at one message per
+microsecond leaves the core idle most of the time and it stays boosted. A
+throughput number measured at full duty cycle on this machine says more about
+the OEM's power budget than about the bus, so there is not one here.
 
 ## Where things live
 
