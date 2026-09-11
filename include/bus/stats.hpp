@@ -1,10 +1,7 @@
 #pragma once
 
-// Latency statistics and result output.
-//
-// Deliberately separate from the hot path: nothing here runs while anything is
-// being measured. Samples are collected as raw TSC ticks into a pre-sized
-// vector, and every conversion, sort and percentile happens afterwards.
+// Percentiles and result output. Nothing here runs while anything is being
+// measured: samples are collected as raw ticks and converted afterwards.
 
 #include "bus/timing.hpp"
 
@@ -29,12 +26,8 @@ struct Stats {
     double max_ns   = 0;
 };
 
-// Sorts `ticks` IN PLACE and returns the summary in nanoseconds.
-//
-// Nearest-rank percentiles: index = p * (n-1), no interpolation. With sample
-// counts in the millions the difference from an interpolating definition is far
-// below the measurement noise, and this way a reported p99.9 is always an
-// actually-observed value rather than a computed one.
+// Sorts in place. Nearest-rank percentiles, so a reported p99.9 is a value that
+// was actually observed rather than interpolated between two neighbours.
 inline Stats summarise(std::vector<uint64_t>& ticks, const TscClock& clk) {
     Stats s;
     if (ticks.empty()) return s;
@@ -47,9 +40,6 @@ inline Stats summarise(std::vector<uint64_t>& ticks, const TscClock& clk) {
         return clk.to_ns(ticks[i]);
     };
 
-    // Summed as long double: a million ticks at ~10^2 each stays far inside
-    // double's exact-integer range, but the habit is cheap and the cost is zero
-    // here because this runs once, after the run.
     long double total = 0;
     for (uint64_t t : ticks) total += static_cast<long double>(t);
 
@@ -76,9 +66,8 @@ inline void print_stats(const Stats& s, const char* label) {
     std::printf("    max    %9.1f ns\n", s.max_ns);
 }
 
-// One row per sample: consumer_id, sample_ns. Written after the run, never
-// during. Call this BEFORE summarise(), which sorts in place: the plots need
-// arrival order for the time-series panel, and a sorted file cannot provide it.
+// Call before summarise(), which sorts in place: the time-series panel needs
+// arrival order.
 inline bool write_samples_csv(const std::string& path,
                               const std::vector<uint64_t>& ticks,
                               const TscClock& clk,
