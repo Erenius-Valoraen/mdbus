@@ -33,10 +33,13 @@ def read_samples(csv: pathlib.Path):
     nanosecond value per line."""
     first = csv.open().readline().strip()
     has_header = any(c.isalpha() for c in first)
-    ncols = first.count(",") + 1
-    if ncols >= 2:
-        return np.loadtxt(csv, delimiter=",", skiprows=1 if has_header else 0, usecols=1)
-    return np.loadtxt(csv, skiprows=1 if has_header else 0)
+    skip = 1 if has_header else 0
+    if first.count(",") + 1 >= 2:
+        s = np.loadtxt(csv, delimiter=",", skiprows=skip, usecols=1)
+    else:
+        s = np.loadtxt(csv, skiprows=skip)
+    # A one-row file loads as a 0-d array, which has no len().
+    return np.atleast_1d(s)
 
 
 def load(target: pathlib.Path):
@@ -125,6 +128,8 @@ def main():
     args = ap.parse_args()
 
     samples, meta = load(args.target)
+    if samples.size == 0:
+        sys.exit(f"{args.target} contains no samples")
     if args.out:
         out = args.out
     elif args.target.is_dir():
@@ -134,6 +139,10 @@ def main():
 
     p50, p90, p99, p999 = np.percentile(samples, [50, 90, 99, 99.9])
     lo, hi = samples.min(), samples.max()
+    if hi <= lo:
+        # Every sample identical: give the axes a nominal width so matplotlib
+        # has something to draw rather than warning about a singular range.
+        lo, hi = lo * 0.99 or -1.0, hi * 1.01 or 1.0
 
     if args.hero:
         # A compact view of the body of the distribution, for embedding
@@ -167,7 +176,7 @@ def main():
         ax.annotate(f"fastest {lo:,.0f} ns", (lo, ax.get_ylim()[1] * 0.55),
                     xytext=(10, 0), textcoords="offset points",
                     fontsize=9.5, color=ACCENT, va="top")
-        ax.set_xlim(lo, cut)
+        ax.set_xlim(lo, max(cut, lo + 1e-9))
         ax.set_yticks([])
         ax.set_xlabel("latency (ns)")
         title = f"{len(samples):,} samples ({frac:.0f}% shown)"
@@ -204,7 +213,7 @@ def main():
     ax.hist(samples, bins=aligned_bins(lo, body_hi, q), range=(lo, body_hi),
             color=BODY, edgecolor="none")
     marks(ax)
-    ax.set_xlim(lo, body_hi)
+    ax.set_xlim(lo, max(body_hi, lo + 1e-9))
     ax.set_title("body of the distribution, linear, clipped at p99 "
                  f"(bins aligned to the {q:.3f} ns tick)")
     ax.set_xlabel("latency (ns)"); ax.set_ylabel("count")
