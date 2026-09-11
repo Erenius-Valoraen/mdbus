@@ -113,8 +113,17 @@ show() {
     echo "  - move the soft lockup watchdog off them"
     echo "  - run the command at SCHED_FIFO 80 inside that partition"
     echo
-    echo "current interrupt counts on the target CPUs:"
-    awk -v a=4 -v b=6 'NR==1{next} {ta+=$(a+2); tb+=$(b+2)} END{printf "  cpu%d %d   cpu%d %d\n", a, ta, b, tb}' /proc/interrupts
+    echo "current state:"
+    echo "  isolated cpuset   $([ -d "$BENCH" ] && cat $BENCH/cpuset.cpus.partition 2>/dev/null || echo 'not applied')"
+    echo "  root cgroup sees  $(cat $CG/cpuset.cpus.effective 2>/dev/null || echo 'cpuset not enabled')"
+    echo "  kernel isolcpus   $(cat /sys/devices/system/cpu/isolated)  (boot parameter)"
+    echo "  kernel nohz_full  $(cat /sys/devices/system/cpu/nohz_full)  (boot parameter)"
+    echo
+    echo "interrupts taken since boot, per CPU:"
+    awk 'NR==1{n=NF; next}
+         {for (i = 2; i <= n + 1; i++) if ($i ~ /^[0-9]+$/) t[i] += $i}
+         END {for (i = 2; i <= n + 1; i++) printf "  cpu%-3d %10d%s", i-2, t[i], (i % 4 == 1 ? "\n" : "")
+              printf "\n"}' /proc/interrupts
     echo
     echo "run it:        sudo $0 run ./build/pingpong_variants 5"
     echo "the rest:      sudo $0 permanent"
