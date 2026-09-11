@@ -1,12 +1,17 @@
+// Two threads bounce a value between two cores through a four-slot ring, and
+// one of them times the round trip. This is the smallest thing that measures
+// how long a cache line takes to move between physical cores.
+//
+//   ./pingpong_legacy samples.csv
+//   python plots/plot_run.py samples.csv
+
 #include <iostream>
 #include <thread>
-#include <pthread.h>
-#include <sched.h>
 #include <atomic>
 #include <vector>
-#include <chrono>
 #include <fstream>
 
+#include "bus/affinity.hpp"
 #include "bus/timing.hpp"
 
 template <size_t N>
@@ -35,14 +40,16 @@ std::ostream& operator<<(std::ostream& os, const std::vector<T>& vec) {
 }
 
 
-void pin_to_core(int core) {
-    cpu_set_t set;
-    CPU_ZERO(&set);
-    CPU_SET(core, &set);
-    pthread_setaffinity_np(pthread_self(), sizeof(set), &set);
-}
-
 int main(int argc, char* argv[]) {
+    if (argc < 2) {
+        std::cerr << "usage: " << argv[0] << " <output.csv>\n";
+        return 2;
+    }
+    // Two distinct physical performance cores. Siblings of one core would share
+    // L1 and L2, so the message would never actually cross a core.
+    constexpr int kCoreA = 4;
+    constexpr int kCoreB = 6;
+
     const int ring_length = 4;
     std::atomic<int> ring1[ring_length] = {0, 0, 0, 0};
     std::atomic<int> ring2[ring_length] = {0, 0, 0, 0};
@@ -51,7 +58,10 @@ int main(int argc, char* argv[]) {
 
 
     std::thread a([&] {
-        pin_to_core(2);
+        if (!bus::pin_and_verify(kCoreA)) {
+            std::cerr << "could not pin to core " << kCoreA << "\n";
+            return;
+        }
         int i = 0;
         int HOPS = 0;
         int val = 1;
@@ -77,7 +87,10 @@ int main(int argc, char* argv[]) {
     
 
     std::thread b([&] {
-        pin_to_core(4);
+        if (!bus::pin_and_verify(kCoreB)) {
+            std::cerr << "could not pin to core " << kCoreB << "\n";
+            return;
+        }
         int i = 0;
         int HOPS = 0;
 
@@ -106,5 +119,11 @@ int main(int argc, char* argv[]) {
     std::cout << ring2 << "\n";
 
     std::ofstream out(argv[1]);
+    if (!out) {
+        std::cerr << "cannot write " << argv[1] << "\n";
+        return 1;
+    }
     for (double s : ns_times) out << s << "\n";
+    std::cout << "wrote " << N << " samples to " << argv[1] << "\n";
+    return 0;
 }
