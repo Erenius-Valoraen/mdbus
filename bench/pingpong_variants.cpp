@@ -25,15 +25,14 @@ constexpr int      kCoreB = 6;
 
 struct Res { double min, p50, p90, p99, p999, p9999, max; };
 
-// Set from the command line: when non-empty, each variant's raw samples are
-// written to <dir>/<tag>.<variant>.csv for plotting.
+// When non-empty, the last repetition of each variant writes its raw samples
+// to <dir>/<tag>.<variant>.csv. Globals rather than parameters because every
+// variant shares one signature and threading a writer through all seven of
+// them would obscure the code they exist to compare.
 std::string g_dump_dir, g_tag;
 const char* g_dump_variant = nullptr;
 
 void dump(const char* variant, const std::vector<uint64_t>& ticks,
-          const bus::TscClock& clk);
-
-void dump_impl(const char* variant, const std::vector<uint64_t>& ticks,
           const bus::TscClock& clk) {
     if (g_dump_dir.empty()) return;
     std::string name(variant);
@@ -44,9 +43,6 @@ void dump_impl(const char* variant, const std::vector<uint64_t>& ticks,
     for (uint64_t t : ticks) std::fprintf(f, "%.1f\n", clk.to_ns(t));
     std::fclose(f);
 }
-
-void dump(const char* variant, const std::vector<uint64_t>& ticks,
-          const bus::TscClock& clk) { dump_impl(variant, ticks, clk); }
 
 Res summarise(std::vector<uint64_t> v, const bus::TscClock& c) {
     v.erase(v.begin(), v.begin() + v.size() / 10);
