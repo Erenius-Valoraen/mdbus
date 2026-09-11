@@ -301,61 +301,63 @@ late is expensive.
 
 ## Two axes, measured separately
 
-The ping-pong this project grew out of is still in `legacy/`, and it turned out
-to be a good vehicle for separating two questions that are easy to conflate:
-how much of the latency is the code, and how much is the machine it runs on.
+Tail latency is set by two things that are easy to confuse: the code, and the
+machine the code runs on. Running the bus under two machine configurations
+separates them, and they turn out to be close to orthogonal.
 
-Seven variants of the same protocol were run in one process under identical
-conditions, with the variant order shuffled between repetitions so a warming
-machine could not be mistaken for a faster variant. Then the whole set was run
-again with the two cores isolated at runtime.
+Two million messages, paced at one million a second so the ring never backs up,
+producer on core 4 and consumer on core 6:
 
-| | p50 | p99 | p99.9 |
+| | ordinary machine | isolated cores | |
 |---|---|---|---|
-| original code, ordinary machine | 190 ns | 355 ns | 2511 ns |
-| tuned code, ordinary machine | 112 ns | 180 ns | 2384 ns |
-| original code, isolated cores | 95 ns | 165 ns | 496 ns |
-| tuned code, isolated cores | **90 ns** | **101 ns** | **347 ns** |
+| min | 64 ns | 61 ns | |
+| p50 | 125 ns | 123 ns | unchanged |
+| p90 | 140 ns | 128 ns | 1.1x |
+| p99 | 842 ns | 136 ns | **6.2x** |
+| p99.9 | 12.9 us | 1.5 us | **8.8x** |
+| p99.99 | 251 us | 6.9 us | **36.7x** |
+| max | 415 us | 70 us | 5.9x |
 
-Read down the two middle rows and the split is clean. Code changes moved the
-body a long way and the tail not at all: every variant, including the original,
-landed between 2383 and 2511 ns at p99.9 on an ordinary machine. Isolation
-moved the tail by a factor of five to eight and the body comparatively little.
-They are close to orthogonal, and neither substitutes for the other.
+The median does not move at all and the far tail improves by a factor of
+thirty-seven. Nothing about the code changed between those two columns. The
+isolation is applied at runtime by `scripts/fix_env.sh`: a cgroup v2 cpuset
+partition in `isolated` mode takes the cores out of scheduler load balancing
+the way `isolcpus` does but reversibly, every movable interrupt is steered
+elsewhere, and the process runs at a real-time priority. The two cores had been
+absorbing over 400,000 interrupts each.
 
-What the code changes were, in order of contribution: replacing the default
-sequentially consistent atomics with release and acquire, which on x86 turns a
-locked exchange into a plain store; hoisting a redundant load out of the
-consumer's spin loop, since the value it re-read every iteration was one only
-that thread could write; and storing each latency sample with a non-temporal
-write so the three megabytes of results streaming past do not evict the ring's
-cache line. Two things that did nothing: forcing both rings into one aligned
-struct, and reducing the ring to a single slot.
+The other direction was measured on the two-core ping-pong in `legacy/`, which
+is small enough that a code change has nowhere to hide. Seven variants ran in
+one process with the order shuffled between repetitions, so a warming machine
+could not be mistaken for a faster variant. Release and acquire in place of the
+default sequentially consistent atomics, which on x86 turns a locked exchange
+into a plain store; hoisting a redundant load out of the consumer's spin loop,
+since the value it re-read every iteration was one only that thread could
+write; and a non-temporal store for each latency sample, so the results
+streaming past do not evict the ring's cache line. Together those took the
+median from 190 to 112 ns and left p99.9 within noise of 2400 ns for every
+variant including the unmodified one.
 
-Notably `_mm_pause()`, which is the standard advice for a spin loop, measures
-**39 ns** on this processor, roughly 190 cycles. Dropping one into a loop
-waiting for an event that arrives in 100 ns would cost more than it saves. It
-is there to be polite to a hyperthread sibling and to save power, and on a
-dedicated core it is the wrong instruction.
+Two changes that did nothing: forcing both rings into one aligned struct, and
+reducing the ring to a single slot.
+
+`_mm_pause()` is the standard advice for a spin loop and measures **39 ns** on
+this processor, roughly 190 cycles. Waiting for an event that arrives in 100 ns,
+it costs more than it saves. Its purpose is to be polite to a hyperthread
+sibling and to save power, and on a dedicated core neither applies.
 
 ![variant comparison](results/variants/variants.png)
 
-Neither axis reaches the extreme end. Every variant still records a worst case
-between 20 and 60 microseconds, and the right-hand panel puts that in
+Neither axis reaches the extreme end. The bus still records a 70 microsecond
+worst case with the cores isolated, and the right-hand panel puts the tail in
 proportion: 2.9% of messages exceed 200 ns, 0.07% exceed a microsecond, and
-fewer than one in a hundred thousand exceed 50. Those are rare enough to look
-like a rounding error and frequent enough to matter, since at ten million
-messages a second a one-in-two-hundred-thousand event happens about fifty times
-a second.
+fewer than one in a hundred thousand exceed 50. Rare enough to look like a
+rounding error, frequent enough to matter, since at ten million messages a
+second a one-in-two-hundred-thousand event happens about fifty times a second.
 
-The isolation is applied at runtime rather than through the kernel command
-line, via `scripts/fix_env.sh`: a cgroup v2 cpuset partition in `isolated` mode
-removes the cores from scheduler load balancing the way `isolcpus` does, every
-movable interrupt is steered elsewhere, and the process runs at a real-time
-priority. The benchmark cores had been absorbing over 400,000 interrupts each,
-which is most likely what the 2400 ns floor was. The one piece with no runtime
-equivalent is `nohz_full`, since the periodic scheduler tick needs a boot
-parameter to stop.
+The one piece of isolation with no runtime equivalent is `nohz_full`, since
+stopping the periodic scheduler tick needs a kernel command line parameter.
+That is the most likely source of what remains.
 
 ## Where things live
 
