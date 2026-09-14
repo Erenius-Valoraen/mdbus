@@ -1,7 +1,7 @@
 # Low-Latency Market-Data Bus — Design Doc
 
 **Working name:** `mdbus`
-**Status:** approved design, ready to implement
+**Status:** written before implementation. The SPSC ring, timing layer, paced benchmark and runtime core isolation are built; the SPMC broadcast ring and the load generator are not.
 **Language:** C++ (17 or 20) · **Platform:** Linux (bare metal for final numbers; WSL acceptable for dev)
 
 ---

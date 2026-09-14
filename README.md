@@ -25,7 +25,7 @@ making them small and predictable is harder than making the average small.
 
 A lock-free ring buffer that carries fixed-size 64 byte messages from a producer thread
 on one core to a consumer thread on another, a timing layer accurate enough to measure
-something that takes about 150 nanoseconds, and a benchmark that runs several million
+something that takes about 130 nanoseconds, and a benchmark that runs several million
 messages through it and reports the distribution.
 
 "Lock-free" here means the two threads coordinate through atomic variables rather than
@@ -34,21 +34,21 @@ something, which matters because a thread that holds a lock and then gets desche
 the operating system will stall the other thread for as long as it takes the scheduler
 to run it again, potentially milliseconds.
 
-Five million messages from core 4 to core 6 through a 1024 slot ring, on an Intel
-i7-13700H running Arch Linux. Every message arrived exactly once, in order, with its
-contents intact.
+Five million messages from core 4 to core 6 through a 1024 slot ring, paced at one
+million a second, on an Intel i7-13700H running Arch Linux, with the first 10%
+discarded as warm-up. Every message arrived exactly once, in order, with its contents
+intact.
 
-![latency distribution](results/spsc_padded/latency.png)
+![latency distribution](results/spsc_paced/latency.png)
 
 | | |
 |---|---|
-| fastest observed | 41.8 ns |
-| median (p50) | 154.2 ns |
-| p90 | 209.7 ns |
-| p99 | 1.0 µs |
-| p99.9 | 16.9 µs |
-| slowest observed | 87.0 µs |
-| throughput | 18.1 M messages/s (1156 MB/s) |
+| fastest observed | 71 ns |
+| median (p50) | 134 ns |
+| p90 | 143 ns |
+| p99 | 587 ns |
+| p99.9 | 6.5 µs |
+| p99.99 | 68.9 µs |
 
 The left two panels of the figure show the same distribution twice, once zoomed into the
 body and once on logarithmic axes so the long tail is visible. The top right panel plots
@@ -63,23 +63,19 @@ median stays flat for the whole run while the slow messages arrive in bursts.
 The median is a real measurement of what the ring costs. The tail is mostly not the
 ring, and I would rather explain that than quote it as though it were.
 
-There are two separate causes, and the larger one is queueing. This benchmark runs the
-producer as fast as it possibly can, so it outruns the consumer and the ring fills up,
-and once the ring is full every new message has to wait for the 1024 messages ahead of
-it to be processed before it is even looked at. At roughly 50 nanoseconds each that is about 50 microseconds
-of delay available inside the buffer, which is the right size to explain most of what
-the tail shows. This is a property of pushing the system to saturation, not a property
-of the transport.
+An earlier version of this benchmark ran the producer as fast as it possibly could,
+which outran the consumer and filled the ring, so every new message waited behind the
+1024 ahead of it. At roughly 50 nanoseconds each that is about 50 microseconds of delay
+inside the buffer, which was the right size to explain most of that version's tail. It
+is a property of saturation rather than of the transport, which is why the run above is
+paced: one message per microsecond is slow enough that the ring never backs up.
 
-The other cause is the operating system, since nothing on this machine is isolated from
-the normal work a desktop does. The kernel's timer interrupt fires on the benchmark's
-cores, other processes get scheduled, and power management adjusts clock speeds while
-the measurement is running, all of which show up as the spikes in the bottom right
-panel.
-
-Both are addressable and both are things I have not done yet, so the honest summary is
-that the median and the throughput are trustworthy, and the tail should be read as an
-upper bound on what the ring costs rather than as a measurement of it.
+With queueing gone, what remains in the tail is the operating system. Nothing was
+isolated for this run, so the kernel's timer interrupt fired on the benchmark's cores
+and other work was scheduled onto them, and that shows up as the bursts in the bottom
+right panel. The honest summary is that the median is trustworthy and the tail is an
+upper bound on what the ring costs. How much of that tail belongs to the machine rather
+than the code is measured directly under [What sets the tail](#what-sets-the-tail).
 
 ## Running it
 
@@ -102,9 +98,9 @@ just failing to catch a problem.
 To reproduce the figure:
 
 ```bash
-./build/spsc_latency --messages 5000000 --out results/spsc_padded
+./build/spsc_latency --messages 5000000 --rate 1 --out results/spsc_paced
 pip install -r plots/requirements.txt
-python plots/plot_run.py results/spsc_padded
+python plots/plot_run.py results/spsc_paced
 ```
 
 Alongside the raw samples, each run writes a small JSON file recording the configuration
@@ -129,10 +125,11 @@ both. When a core wants to write to a line another core is holding, the other co
 be invalidated first, and when that second core next reads the address it has to fetch
 the line again from wherever the current version lives.
 
-That fetch is the fundamental cost being measured here. It is not a software cost and no
-amount of clever code removes it. It is roughly 40 to 80 nanoseconds of physical signal
-travel between two caches on the same chip, and the numbers above are essentially that
-cost plus the bookkeeping around it.
+That fetch is the fundamental cost being measured here. It is a hardware cost that no
+amount of clever code removes, though code can add plenty on top of it. Distance is not
+what makes it slow, since a signal crosses the chip in picoseconds; the time goes into
+invalidating one core's copy and fetching the line into the other. The fastest delivery
+in the run above took 71 nanoseconds, so whatever that floor is, it is no higher.
 
 ## How the ring works
 
@@ -190,7 +187,7 @@ deliberately not enforced at runtime, because enforcing it would cost the thing 
 
 ## How the timing works
 
-Measuring something that takes 150 nanoseconds with a clock that takes 25 nanoseconds to
+Measuring something that takes 130 nanoseconds with a clock that takes 25 nanoseconds to
 read is a problem, so the timing layer was built and characterised before anything was
 measured with it.
 
@@ -222,8 +219,9 @@ clock for a tenth of a second, rather than trusting the value the kernel prints 
 The two agree to about 13 parts per million. The code also asks the CPU directly whether
 its counter is of the type that ticks at a constant rate regardless of how fast the core
 is currently running, because on older processors it counted actual core cycles, which
-makes it useless as a clock. If that check fails the tests fail, on the principle that a
-benchmark which silently reports wrong numbers is worse than one that refuses to run.
+makes it useless as a clock. If that check fails the timing test prints a warning rather
+than failing, and every benchmark run records the answer next to its numbers, so a result
+from a machine without it can never be mistaken for one from a machine with it.
 
 ## The machine, and what is not controlled
 
@@ -253,12 +251,13 @@ logical CPU per physical core, and the pinning call checks its return value, whi
 worth mentioning only because the function reports failure differently from most of the
 POSIX API and testing it the usual way silently succeeds every time.
 
-Several things are deliberately left uncontrolled for now. The cores are not isolated
-from the rest of the system, so ordinary kernel and userspace work still gets scheduled
-on them, simultaneous multithreading is still enabled, and although the CPU governor is
-set to performance the clock speed still moves around within that. Together these are
-why the tail is noisy, and dealing with them is the next piece of work rather than
-something already finished.
+Several things are still left uncontrolled. The isolation described under
+[What sets the tail](#what-sets-the-tail) covers only the two benchmark CPUs, so their
+hyperthread siblings, CPUs 5 and 7, remain available to the rest of the system.
+Simultaneous multithreading and turbo both stay on: turning them off together doubled
+the ping-pong's median, from 114 to 229 nanoseconds, and SMT alone accounts for only 5
+of that. And the periodic scheduler tick still fires on the benchmark cores, since
+stopping it needs `nohz_full` at boot.
 
 ## Things that turned out differently than expected
 
@@ -307,18 +306,20 @@ configurations separates them, and on this hardware they barely interact.
 
 ![environment comparison](results/bus/environment.png)
 
-Both curves are the same code, two million messages each, paced at one message
-per microsecond so the ring never backs up. They are indistinguishable through
-p90 and then diverge by a factor of thirty-three.
+Both curves are the same code, two million messages each, paced at one message per
+microsecond so the ring never backs up. They are indistinguishable through p90, and by
+p99.99 they are thirty-three times apart.
 
 | | ordinary machine | isolated cores | |
 |---|---|---|---|
-| p50 | 125 ns | 123 ns | unchanged |
-| p90 | 140 ns | 128 ns | 1.1x |
-| p99 | 842 ns | 136 ns | 6.2x |
-| p99.9 | 12.9 us | 1.5 us | 8.8x |
-| p99.99 | 251 us | 6.9 us | **36.7x** |
-| max | 415 us | 70 us | 5.9x |
+| median | 114 ns | 123 ns | |
+| slower than 200 ns | 4.76% | 0.434% | 11x fewer |
+| slower than 1 µs | 1.03% | 0.145% | 7.1x fewer |
+| slower than 10 µs | 0.170% | 0.00772% | 22x fewer |
+| slower than 50 µs | 0.0324% | 0.00136% | 24x fewer |
+
+Read as percentiles, isolation cuts p99 by 8x, p99.9 by 10x and p99.99 by 33x, while the
+median moves only from 114 to 123 ns.
 
 The isolation is applied at runtime by `scripts/fix_env.sh`, not through the
 kernel command line. A cgroup v2 cpuset partition in `isolated` mode takes the
@@ -336,17 +337,19 @@ small enough that a change has nowhere to hide. Seven variants ran in one
 process with the order shuffled between repetitions, so a warming machine could
 not be mistaken for a faster variant.
 
-Three things helped. Release and acquire in place of the default sequentially
-consistent atomics, which on x86 turns a locked exchange into a plain store.
-Hoisting a redundant load out of the consumer's spin loop, since the value it
-re-read every iteration was one only that thread could write. And a
-non-temporal store for each latency sample, so the results streaming past do
-not evict the ring's cache line. Together they took the median from 190 to
-112 ns while p99.9 stayed within noise of 2400 ns for every variant including
-the unmodified one.
+Three changes target the body of the distribution. Release and acquire in place of the
+default sequentially consistent atomics, which on x86 turns a locked exchange into a
+plain store. Hoisting a redundant load out of the consumer's spin loop, since the value
+it re-read every iteration was one only that thread could write. And a non-temporal
+store for each latency sample, so the results streaming past do not evict the ring's
+cache line. Two more change the layout: forcing both rings into one aligned struct, and
+reducing the ring to a single slot.
 
-Two changes did nothing measurable: forcing both rings into one aligned struct,
-and reducing the ring to a single slot.
+On isolated cores the packed struct is the one variant that is visibly worse, sitting
+above the original through p99, and the single-slot ring holds the lowest tail of the
+seven. In the noisy runs the variants bunch together through p99.9, which is the previous
+section's result seen from the other side: on a machine that is not isolated, the
+environment sets the tail and the code barely registers.
 
 `_mm_pause()` is the standard advice for a spin loop and measures **39 ns** on
 this processor, roughly 190 cycles. Waiting for something that arrives in
@@ -364,21 +367,23 @@ of 15 W against a 64 W burst limit, so a short benchmark runs inside the burst
 window at high clock and a longer one settles to 1600 MHz. Temperatures stay
 around 50 C, so it is a power cap rather than thermal throttling.
 
-The latency figures above are unaffected because a run paced at one message per
-microsecond leaves the core idle most of the time and it stays boosted. A
-throughput number measured at full duty cycle on this machine says more about
-the OEM's power budget than about the bus, so there is not one here.
+The latency figures above are unaffected. A run paced at one message per microsecond
+does a small fraction of the work of a saturated one, even though both threads spin
+rather than sleep, and it stays boosted. A throughput number measured at full duty
+cycle on this machine says more about the OEM's power budget than about the bus, so
+there is not one here.
 
 ## Where things live
 
 ```
 include/bus/   the library, header only: timing, message layout, core pinning,
                the ring itself, and percentile calculation
-bench/         the latency benchmark
+bench/         the bus latency benchmark and the ping-pong variants harness
 tests/         correctness tests, including a ThreadSanitizer build
-plots/         the plotting script
+plots/         plotting scripts for single runs and comparisons
+scripts/       machine setup for measurement: runtime core isolation, benchmark mode
 legacy/        the two-core ping-pong this started from
-results/       generated figures and metadata
+results/       generated figures; raw samples stay local
 ```
 
 `DESIGN.md` has the fuller design document, including the parts not built yet.

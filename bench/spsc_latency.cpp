@@ -4,12 +4,11 @@
 // them; a consumer pinned to a different physical P-core pops them, checks
 // integrity, and records how long each one took to arrive.
 //
-// MODE: saturation. The producer runs as fast as it can rather than following
-// an external arrival schedule. That measures the transport's floor, which is
-// what this stage is for -- but it is NOT coordinated-omission-correct, because
-// a producer that stalls simply sends late and nothing records that it was
-// supposed to have sent earlier. Latency against a pre-generated intended_tsc
-// schedule arrives with the load generator (DESIGN.md D8/D9).
+// MODES. With --rate the producer follows a fixed arrival schedule and latency
+// is measured from each message's intended send time, which is coordinated-
+// omission correct: a producer that stalls is charged for the delay. Without
+// --rate it saturates, which measures the transport's floor but lets a stalled
+// producer hide its lateness, so use it for throughput rather than latency.
 //
 // Every run prints the environment it ran in and writes it alongside the
 // results, because a latency number without its conditions is not a
