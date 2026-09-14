@@ -27,7 +27,7 @@
 #              waiting to be convinced there is work to do.
 #
 # Turbo off is the one that trades the most away, and on this machine it is not
-# a free win: measured on the ping-pong it halved the relative spread (p99/p50
+# a free win: measured on the ping-pong it cut the relative spread (p99/p50
 # from 2.23 to 1.41) but doubled the median, because base clock is roughly half
 # of boost. Use --keep-turbo to isolate what SMT alone is worth, and compare the
 # three configurations before settling on one.
